@@ -6,99 +6,97 @@ import {
   StyleSheet, 
   TouchableOpacity, 
   Text, 
-  ActivityIndicator,
   Dimensions,
   StatusBar,
   Keyboard,
-  TextInput // ADD THIS IMPORT
+  TextInput,
+  Alert
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "../Constants/Colors";
-import { auth, db } from "./firebaseConfig";
-import { collection, query, orderBy, onSnapshot, addDoc, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import firestore from '@react-native-firebase/firestore';
 
 const { width, height } = Dimensions.get('window');
 
 export default function TodoList({ navigation, route }) {
   const [todoItems, setTodoItems] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [newTodoText, setNewTodoText] = useState('');
-  const [error, setError] = useState(null);
+  const [currentListId, setCurrentListId] = useState(null);
   const newItemInputRef = useRef(null);
 
-  // Debug logging
-  console.log("TodoList screen rendered");
-  console.log("Route params:", route.params);
-  console.log("Current user:", auth.currentUser?.uid);
+  // Get the list name from route params or use default
+  const listName = route.params?.listName || 'New TodoList';
 
   useLayoutEffect(() => {
     navigation.setOptions({
+      title: listName,
       headerRight: () => (
         <TouchableOpacity onPress={startAddingNew} style={styles.headerButton}>
           <Ionicons name="add" size={28} color="white" />
         </TouchableOpacity>
       ),
     });
-  }, [navigation]);
+  }, [navigation, listName]);
 
+  // Load todos from Firestore when component mounts or listName changes
   useEffect(() => {
-    const user = auth.currentUser;
-    const listId = route.params?.listid;
-    
-    console.log("Firestore setup - User:", user?.uid, "List ID:", listId);
-    
-    if (!user || !listId) {
-      console.log("Missing user or listId - User:", !!user, "ListId:", listId);
-      setLoading(false);
-      setError("Missing user authentication or list ID");
-      return;
-    }
+    loadTodosFromFirestore();
+  }, [listName]);
 
+  // Save todos to Firestore whenever todoItems changes
+  useEffect(() => {
+    if (currentListId && todoItems.length > 0) {
+      saveTodosToFirestore();
+    }
+  }, [todoItems, currentListId]);
+
+  const loadTodosFromFirestore = async () => {
     try {
-      // Correct Firestore path: users/{userId}/lists/{listId}/todos
-      const todoRef = collection(db, "users", user.uid, "lists", listId, "todos");
-      console.log("Firestore path:", `users/${user.uid}/lists/${listId}/todos`);
+      // Query for the todo list with the given name
+      const listsRef = firestore().collection('todoLists');
+      const querySnapshot = await listsRef.where('name', '==', listName).get();
       
-      const q = query(todoRef, orderBy("createdAt", "asc"));
-      
-      const unsubscribe = onSnapshot(q, 
-        (snapshot) => {
-          console.log("Firestore snapshot received, count:", snapshot.size);
-          const itemsData = [];
-          snapshot.forEach((doc) => {
-            itemsData.push({ id: doc.id, ...doc.data() });
-          });
-          setTodoItems(itemsData);
-          setLoading(false);
-          setError(null);
-        },
-        (error) => {
-          console.error("Firestore error:", error);
-          setError("Error loading todos: " + error.message);
-          setLoading(false);
+      if (!querySnapshot.empty) {
+        // List exists, get the first matching document
+        const listDoc = querySnapshot.docs[0];
+        setCurrentListId(listDoc.id);
+        
+        const listData = listDoc.data();
+        if (listData.items && Array.isArray(listData.items)) {
+          setTodoItems(listData.items);
+        } else {
+          setTodoItems([]);
         }
-      );
-
-      return unsubscribe;
+      } else {
+        // List doesn't exist, create a new one
+        const newListRef = await listsRef.add({
+          name: listName,
+          items: [],
+          createdAt: firestore.FieldValue.serverTimestamp(),
+          updatedAt: firestore.FieldValue.serverTimestamp()
+        });
+        setCurrentListId(newListRef.id);
+        setTodoItems([]);
+      }
     } catch (error) {
-      console.error("Setup error:", error);
-      setError("Setup error: " + error.message);
-      setLoading(false);
+      console.error('Error loading todos:', error);
+      Alert.alert("Error", "Failed to load todos");
     }
-  }, [route.params?.listid]);
+  };
 
-  // Focus on new item input when adding starts
-  useEffect(() => {
-    if (isAddingNew) {
-      setTimeout(() => {
-        newItemInputRef.current?.focus();
-      }, 100);
+  const saveTodosToFirestore = async () => {
+    try {
+      if (!currentListId) return;
+
+      await firestore().collection('todoLists').doc(currentListId).update({
+        items: todoItems,
+        updatedAt: firestore.FieldValue.serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error saving todos:', error);
+      Alert.alert("Error", "Failed to save todos");
     }
-  }, [isAddingNew]);
-
-  const countWords = (text) => {
-    return text.trim().split(/\s+/).filter(word => word.length > 0).length;
   };
 
   const startAddingNew = () => {
@@ -113,112 +111,60 @@ export default function TodoList({ navigation, route }) {
   };
 
   const addNewTodo = async () => {
-    const wordCount = countWords(newTodoText);
-    if (!newTodoText.trim() || wordCount > 30) return;
+    if (!newTodoText.trim()) return;
 
-    const user = auth.currentUser;
-    const listId = route.params?.listid;
-    
-    if (!user || !listId) {
-      setError("Cannot add todo - missing authentication");
-      return;
-    }
+    const newTodo = {
+      id: Date.now().toString(),
+      text: newTodoText.trim(),
+      isChecked: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
-    try {
-      const todoRef = collection(db, "users", user.uid, "lists", listId, "todos");
-      await addDoc(todoRef, {
-        text: newTodoText.trim(),
-        isChecked: false,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-      setIsAddingNew(false);
-      setNewTodoText('');
-      setError(null);
-    } catch (error) {
-      console.error("Error adding todo:", error);
-      setError("Failed to add todo: " + error.message);
-    }
+    const updatedItems = [...todoItems, newTodo];
+    setTodoItems(updatedItems);
+    setIsAddingNew(false);
+    setNewTodoText('');
   };
 
-  const toggleItemChecked = async (item) => {
-    const user = auth.currentUser;
-    const listId = route.params?.listid;
-    
-    if (!user || !listId) return;
-
-    try {
-      const todoDocRef = doc(db, "users", user.uid, "lists", listId, "todos", item.id);
-      await updateDoc(todoDocRef, {
-        isChecked: !item.isChecked,
-        updatedAt: new Date()
-      });
-    } catch (error) {
-      console.error("Error updating todo:", error);
-      setError("Failed to update todo: " + error.message);
-    }
-  };
-
-  const updateItemText = async (item, newText) => {
-    const wordCount = countWords(newText);
-    if (wordCount > 30) return;
-
-    const user = auth.currentUser;
-    const listId = route.params?.listid;
-    
-    if (!user || !listId) return;
-
-    try {
-      const todoDocRef = doc(db, "users", user.uid, "lists", listId, "todos", item.id);
-      await updateDoc(todoDocRef, {
-        text: newText.trim(),
-        updatedAt: new Date()
-      });
-    } catch (error) {
-      console.error("Error updating todo text:", error);
-      setError("Failed to update todo: " + error.message);
-    }
-  };
-
-  const deleteItem = async (item) => {
-    const user = auth.currentUser;
-    const listId = route.params?.listid;
-    
-    if (!user || !listId) return;
-
-    try {
-      const todoDocRef = doc(db, "users", user.uid, "lists", listId, "todos", item.id);
-      await deleteDoc(todoDocRef);
-    } catch (error) {
-      console.error("Error deleting todo:", error);
-      setError("Failed to delete todo: " + error.message);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.blue} />
-        <Text style={styles.loadingText}>Loading todos...</Text>
-      </View>
+  const toggleItemChecked = (itemId) => {
+    setTodoItems(prevItems => 
+      prevItems.map(item => 
+        item.id === itemId 
+          ? { ...item, isChecked: !item.isChecked, updatedAt: new Date() }
+          : item
+      )
     );
-  }
+  };
 
-  if (error) {
-    return (
-      <View style={styles.errorContainer}>
-        <Ionicons name="alert-circle" size={64} color={Colors.red} />
-        <Text style={styles.errorText}>Error</Text>
-        <Text style={styles.errorSubtext}>{error}</Text>
-        <TouchableOpacity 
-          style={styles.retryButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.retryButtonText}>Go Back</Text>
-        </TouchableOpacity>
-      </View>
+  const updateItemText = (itemId, newText) => {
+    if (!newText.trim()) return;
+
+    setTodoItems(prevItems => 
+      prevItems.map(item => 
+        item.id === itemId 
+          ? { ...item, text: newText.trim(), updatedAt: new Date() }
+          : item
+      )
     );
-  }
+  };
+
+  const deleteItem = (itemId) => {
+    Alert.alert(
+      "Delete Todo",
+      "Are you sure you want to delete this todo?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: () => {
+            setTodoItems(prevItems => prevItems.filter(item => item.id !== itemId));
+          }
+        }
+      ]
+    );
+  };
 
   const completedCount = todoItems.filter(item => item.isChecked).length;
   const totalCount = todoItems.length;
@@ -257,11 +203,8 @@ export default function TodoList({ navigation, route }) {
           <View style={styles.newTodoCard}>
             <TextInput
               ref={newItemInputRef}
-              style={[
-                styles.newTodoInput,
-                countWords(newTodoText) > 30 && styles.inputError
-              ]}
-              placeholder="What needs to be done? (Max 30 words)"
+              style={styles.newTodoInput}
+              placeholder="What needs to be done?"
               placeholderTextColor={Colors.lightGray}
               value={newTodoText}
               onChangeText={setNewTodoText}
@@ -273,13 +216,6 @@ export default function TodoList({ navigation, route }) {
             />
             
             <View style={styles.newTodoActions}>
-              <Text style={[
-                styles.wordCount,
-                countWords(newTodoText) > 30 && styles.wordCountError
-              ]}>
-                {countWords(newTodoText)}/30 words
-              </Text>
-              
               <View style={styles.newTodoButtons}>
                 <TouchableOpacity 
                   style={[styles.actionButton, styles.cancelButton]}
@@ -289,13 +225,9 @@ export default function TodoList({ navigation, route }) {
                 </TouchableOpacity>
                 
                 <TouchableOpacity 
-                  style={[
-                    styles.actionButton, 
-                    styles.saveButton,
-                    (!newTodoText.trim() || countWords(newTodoText) > 30) && styles.saveButtonDisabled
-                  ]}
+                  style={[styles.actionButton, styles.saveButton, !newTodoText.trim() && styles.saveButtonDisabled]}
                   onPress={addNewTodo}
-                  disabled={!newTodoText.trim() || countWords(newTodoText) > 30}
+                  disabled={!newTodoText.trim()}
                 >
                   <Ionicons name="checkmark" size={20} color="white" />
                 </TouchableOpacity>
@@ -321,9 +253,9 @@ export default function TodoList({ navigation, route }) {
           renderItem={({ item }) => (
             <TodoItemCard
               item={item}
-              onToggle={() => toggleItemChecked(item)}
-              onTextChange={(newText) => updateItemText(item, newText)}
-              onDelete={() => deleteItem(item)}
+              onToggle={() => toggleItemChecked(item.id)}
+              onTextChange={(newText) => updateItemText(item.id, newText)}
+              onDelete={() => deleteItem(item.id)}
             />
           )}
           contentContainerStyle={[
@@ -342,10 +274,6 @@ const TodoItemCard = ({ item, onToggle, onTextChange, onDelete }) => {
   const [editText, setEditText] = useState(item.text);
   const editInputRef = useRef(null);
 
-  const countWords = (text) => {
-    return text.trim().split(/\s+/).filter(word => word.length > 0).length;
-  };
-
   useEffect(() => {
     if (isEditing) {
       setTimeout(() => {
@@ -354,9 +282,12 @@ const TodoItemCard = ({ item, onToggle, onTextChange, onDelete }) => {
     }
   }, [isEditing]);
 
+  useEffect(() => {
+    setEditText(item.text);
+  }, [item.text]);
+
   const handleSave = () => {
-    const wordCount = countWords(editText);
-    if (editText.trim() && editText !== item.text && wordCount <= 30) {
+    if (editText.trim() && editText !== item.text) {
       onTextChange(editText);
     }
     setIsEditing(false);
@@ -386,22 +317,15 @@ const TodoItemCard = ({ item, onToggle, onTextChange, onDelete }) => {
             <View style={styles.editContainer}>
               <TextInput
                 ref={editInputRef}
-                style={[
-                  styles.editInput,
-                  countWords(editText) > 30 && styles.inputError
-                ]}
+                style={styles.editInput}
                 value={editText}
                 onChangeText={setEditText}
                 onBlur={handleSave}
                 onSubmitEditing={handleSave}
-                autoFocus
                 multiline
                 textAlignVertical="top"
                 blurOnSubmit={true}
               />
-              <Text style={styles.editWordCount}>
-                {countWords(editText)}/30 words
-              </Text>
             </View>
           ) : (
             <TouchableOpacity 
@@ -433,6 +357,7 @@ const TodoItemCard = ({ item, onToggle, onTextChange, onDelete }) => {
   );
 };
 
+// ... (styles remain the same)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -475,49 +400,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontWeight: '500',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.white,
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 16,
-    color: Colors.black,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-    backgroundColor: Colors.white,
-  },
-  errorText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: Colors.red,
-    marginTop: 20,
-    marginBottom: 10,
-  },
-  errorSubtext: {
-    fontSize: 16,
-    color: Colors.gray,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  retryButton: {
-    backgroundColor: Colors.blue,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  // ... rest of your styles remain the same
   newTodoContainer: {
     padding: 15,
     backgroundColor: Colors.lightestGray,
@@ -571,15 +453,7 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: {
     backgroundColor: Colors.lightGray,
-  },
-  wordCount: {
-    fontSize: 12,
-    color: Colors.gray,
-    fontWeight: '500',
-  },
-  wordCountError: {
-    color: Colors.red,
-    fontWeight: 'bold',
+    opacity: 0.5,
   },
   emptyContainer: {
     flex: 1,
@@ -672,14 +546,5 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     minHeight: 40,
     textAlignVertical: 'top',
-  },
-  inputError: {
-    borderColor: Colors.red,
-    backgroundColor: '#FFF5F5',
-  },
-  editWordCount: {
-    fontSize: 12,
-    color: Colors.gray,
-    marginTop: 4,
   },
 });

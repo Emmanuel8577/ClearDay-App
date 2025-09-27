@@ -23,4 +23,5 @@ export const auth = getAuth(app);
 // Initialize Cloud Firestore
 export const db = getFirestore(app);
 
+
 export default app;
