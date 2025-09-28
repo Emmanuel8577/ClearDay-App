@@ -26,11 +26,9 @@ import {
   addDoc, 
   doc, 
   deleteDoc, 
-  updateDoc,
-  where 
+  updateDoc 
 } from 'firebase/firestore';
 
-// Configure notifications with sound
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -49,7 +47,7 @@ const Calendar = ({ navigation }) => {
   const [editingReminder, setEditingReminder] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [remindersLoading, setRemindersLoading] = useState(true);
-  const [remindersError, setRemindersError] = useState(null);
+  const [deleteLoadingId, setDeleteLoadingId] = useState(null);
 
   const [newReminder, setNewReminder] = useState({
     title: '',
@@ -59,25 +57,23 @@ const Calendar = ({ navigation }) => {
   });
 
   useEffect(() => {
-    console.log('Calendar component mounted');
-    loadReminders();
+    const unsubscribe = loadReminders();
     requestNotificationPermissions();
     setupNotificationListener();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   const requestNotificationPermissions = async () => {
     try {
-      console.log('Requesting notification permissions...');
       const { status } = await Notifications.getPermissionsAsync();
       
       if (status !== 'granted') {
-        const { status: newStatus } = await Notifications.requestPermissionsAsync();
-        console.log('Notification permission status:', newStatus);
-      } else {
-        console.log('Notification permission already granted');
+        await Notifications.requestPermissionsAsync();
       }
       
-      // Configure notification channel for Android
       if (Platform.OS === 'android') {
         await Notifications.setNotificationChannelAsync('reminders', {
           name: 'Reminders',
@@ -86,25 +82,15 @@ const Calendar = ({ navigation }) => {
           vibrationPattern: [0, 250, 250, 250],
           lightColor: '#FF231F7C',
         });
-        console.log('Android notification channel configured');
       }
     } catch (error) {
-      console.error('Notification permission error:', error);
+      // Silent fail
     }
   };
 
   const setupNotificationListener = () => {
-    // Listener for when notifications are received while app is foregrounded
-    const subscription = Notifications.addNotificationReceivedListener(notification => {
-      console.log('Notification received:', notification);
-    });
-
-    // Listener for when notifications are tapped
-    const responseSubscription = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log('Notification tapped:', response);
-      // Navigate to calendar when notification is tapped
-      navigation.navigate('Calendar');
-    });
+    const subscription = Notifications.addNotificationReceivedListener(notification => {});
+    const responseSubscription = Notifications.addNotificationResponseReceivedListener(response => {});
 
     return () => {
       subscription.remove();
@@ -114,99 +100,74 @@ const Calendar = ({ navigation }) => {
 
   const scheduleNotification = async (reminder) => {
     try {
-      console.log('Scheduling notification for reminder:', reminder.id);
-      
       const notificationId = await Notifications.scheduleNotificationAsync({
         content: {
           title: '🔔 Reminder: ' + reminder.title,
           body: reminder.description || 'Time for your reminder!',
           sound: 'default',
-          data: { 
-            reminderId: reminder.id,
-            type: 'reminder'
-          },
-          priority: 'high',
+          data: { reminderId: reminder.id },
         },
         trigger: {
           date: reminder.date,
-          channelId: Platform.OS === 'android' ? 'reminders' : undefined,
+          channelId: 'reminders',
         },
       });
       
-      console.log('Notification scheduled successfully with ID:', notificationId);
       return notificationId;
     } catch (error) {
-      console.error('Error scheduling notification:', error);
-      throw error;
+      return null;
     }
   };
 
   const cancelNotification = async (reminderId) => {
     try {
-      console.log('Cancelling notification for reminder:', reminderId);
       const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
       
       for (const notification of scheduledNotifications) {
         if (notification.content.data?.reminderId === reminderId) {
           await Notifications.cancelScheduledNotificationAsync(notification.identifier);
-          console.log('Cancelled notification:', notification.identifier);
         }
       }
     } catch (error) {
-      console.error('Error cancelling notification:', error);
+      // Silent fail
     }
   };
 
   const loadReminders = () => {
     const user = auth.currentUser;
     if (!user) {
-      console.log('No user logged in');
       setReminders([]);
       setRemindersLoading(false);
-      setRemindersError('No user logged in');
       return () => {};
     }
 
-    console.log('Loading reminders for user:', user.uid);
     setRemindersLoading(true);
-    setRemindersError(null);
 
     const remindersRef = collection(db, 'users', user.uid, 'reminders');
     const remindersQuery = query(remindersRef, orderBy('date', 'asc'));
 
     const unsubscribe = onSnapshot(remindersQuery, 
       (snapshot) => {
-        console.log('Firestore snapshot received, document count:', snapshot.size);
-        
         const remindersData = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
-          console.log('Reminder document:', doc.id, data);
-          
-          // Convert Firestore timestamps to Date objects
           const reminderDate = data.date?.toDate ? data.date.toDate() : new Date(data.date);
-          const createdAt = data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt);
           
           remindersData.push({
             id: doc.id,
             title: data.title || '',
             description: data.description || '',
             date: reminderDate,
-            createdAt: createdAt,
             notificationId: data.notificationId,
           });
         });
         
-        console.log('Processed reminders count:', remindersData.length);
         setReminders(remindersData);
         setRemindersLoading(false);
-        setRemindersError(null);
       },
       (error) => {
-        console.error('Error loading reminders:', error);
-        setRemindersError(error.message);
+        console.error("Error loading reminders:", error);
         setRemindersLoading(false);
-        Alert.alert('Error', `Failed to load reminders: ${error.message}`);
       }
     );
 
@@ -214,29 +175,36 @@ const Calendar = ({ navigation }) => {
   };
 
   const handleDateChange = (event, selectedDate) => {
-    setShowDatePicker(Platform.OS === 'ios'); // Keep open on iOS, close on Android
+    setShowDatePicker(false);
     
-    if (selectedDate) {
-      const newDate = new Date(selectedDate);
-      // Preserve the time from existing reminder
-      newDate.setHours(newReminder.time.getHours());
-      newDate.setMinutes(newReminder.time.getMinutes());
-      setNewReminder({...newReminder, date: newDate});
-      console.log('Date changed to:', newDate);
+    if (event.type === 'set' && selectedDate) {
+      const currentTime = newReminder.time;
+      const newDateTime = new Date(selectedDate);
+      newDateTime.setHours(currentTime.getHours());
+      newDateTime.setMinutes(currentTime.getMinutes());
+      
+      setNewReminder({
+        ...newReminder,
+        date: newDateTime,
+        time: currentTime
+      });
     }
   };
 
   const handleTimeChange = (event, selectedTime) => {
-    setShowTimePicker(Platform.OS === 'ios'); // Keep open on iOS, close on Android
+    setShowTimePicker(false);
     
-    if (selectedTime) {
-      const newTime = new Date(selectedTime);
-      // Preserve the date from existing reminder
-      const updatedDate = new Date(newReminder.date);
-      updatedDate.setHours(newTime.getHours());
-      updatedDate.setMinutes(newTime.getMinutes());
-      setNewReminder({...newReminder, time: newTime, date: updatedDate});
-      console.log('Time changed to:', newTime);
+    if (event.type === 'set' && selectedTime) {
+      const currentDate = newReminder.date;
+      const newDateTime = new Date(currentDate);
+      newDateTime.setHours(selectedTime.getHours());
+      newDateTime.setMinutes(selectedTime.getMinutes());
+      
+      setNewReminder({
+        ...newReminder,
+        time: selectedTime,
+        date: newDateTime
+      });
     }
   };
 
@@ -248,12 +216,14 @@ const Calendar = ({ navigation }) => {
       time: new Date(new Date().setHours(new Date().getHours() + 1)),
     });
     setEditingReminder(null);
+    setShowDatePicker(false);
+    setShowTimePicker(false);
   };
 
   const openAddReminderModal = () => {
     resetReminderForm();
     const defaultDate = new Date(selectedDate);
-    defaultDate.setHours(12, 0, 0, 0); // Set to noon by default
+    defaultDate.setHours(12, 0, 0, 0);
     
     setNewReminder({
       title: '',
@@ -262,7 +232,6 @@ const Calendar = ({ navigation }) => {
       time: defaultDate,
     });
     setShowReminderModal(true);
-    console.log('Opened add reminder modal');
   };
 
   const openEditReminderModal = (reminder) => {
@@ -274,13 +243,11 @@ const Calendar = ({ navigation }) => {
       time: reminder.date,
     });
     setShowReminderModal(true);
-    console.log('Opened edit reminder modal for:', reminder.id);
   };
 
   const saveReminder = async () => {
     if (isLoading) return;
 
-    // Validate input
     if (!newReminder.title.trim()) {
       Alert.alert('Error', 'Please enter a reminder title');
       return;
@@ -292,27 +259,11 @@ const Calendar = ({ navigation }) => {
       return;
     }
 
-    console.log('Saving reminder...');
-    console.log('User:', user.uid);
-    console.log('Reminder data:', newReminder);
-
     setIsLoading(true);
 
     try {
-      // Combine date and time into a single datetime
-      const reminderDateTime = new Date(
-        newReminder.date.getFullYear(),
-        newReminder.date.getMonth(),
-        newReminder.date.getDate(),
-        newReminder.time.getHours(),
-        newReminder.time.getMinutes(),
-        0,
-        0
-      );
+      const reminderDateTime = new Date(newReminder.date);
 
-      console.log('Combined datetime:', reminderDateTime);
-
-      // Validate future date
       if (reminderDateTime < new Date()) {
         Alert.alert('Error', 'Please select a future date and time');
         setIsLoading(false);
@@ -324,7 +275,7 @@ const Calendar = ({ navigation }) => {
       const reminderData = {
         title: newReminder.title.trim(),
         description: newReminder.description.trim(),
-        date: reminderDateTime, // Firestore will convert this to Timestamp
+        date: reminderDateTime,
         updatedAt: new Date(),
       };
 
@@ -332,98 +283,140 @@ const Calendar = ({ navigation }) => {
       let notificationId;
 
       if (editingReminder) {
-        // Update existing reminder
-        console.log('Updating existing reminder:', editingReminder.id);
-        reminderData.createdAt = editingReminder.createdAt;
-        
         const reminderRef = doc(db, 'users', user.uid, 'reminders', editingReminder.id);
         await updateDoc(reminderRef, reminderData);
         reminderId = editingReminder.id;
         
-        // Cancel old notification and schedule new one
         await cancelNotification(editingReminder.id);
         notificationId = await scheduleNotification({
           id: editingReminder.id,
           ...reminderData
         });
       } else {
-        // Create new reminder
-        console.log('Creating new reminder');
         reminderData.createdAt = new Date();
-        
         const docRef = await addDoc(remindersRef, reminderData);
         reminderId = docRef.id;
-        console.log('New reminder created with ID:', reminderId);
         
-        // Schedule notification
         notificationId = await scheduleNotification({
           id: reminderId,
           ...reminderData
         });
       }
 
-      // Store notification ID in Firestore for reference
       if (notificationId) {
         const reminderRef = doc(db, 'users', user.uid, 'reminders', reminderId);
         await updateDoc(reminderRef, { 
           notificationId: notificationId,
           updatedAt: new Date()
         });
-        console.log('Notification ID stored in Firestore:', notificationId);
       }
 
-      // Success - reset and close
-      resetReminderForm();
       setShowReminderModal(false);
+      resetReminderForm();
       
-      Alert.alert(
-        'Success', 
-        editingReminder ? 'Reminder updated successfully!' : 'Reminder added successfully! You will receive a notification at the scheduled time.'
-      );
+      setTimeout(() => {
+        Alert.alert(
+          'Success', 
+          editingReminder ? 'Reminder updated successfully!' : 'Reminder added successfully!'
+        );
+      }, 300);
       
     } catch (error) {
-      console.error('Error saving reminder:', error);
-      Alert.alert('Error', `Failed to save reminder: ${error.message}`);
+      console.error("Error saving reminder:", error);
+      Alert.alert('Error', 'Failed to save reminder');
     } finally {
       setIsLoading(false);
     }
   };
 
   const deleteReminder = async (reminderId) => {
+    console.log('deleteReminder called with ID:', reminderId);
+    
     const user = auth.currentUser;
-    if (!user) return;
+    if (!user) {
+      console.log('No authenticated user found');
+      Alert.alert('Error', 'You must be logged in to delete reminders');
+      return;
+    }
+
+    const reminderToDelete = reminders.find(reminder => reminder.id === reminderId);
+    const reminderTitle = reminderToDelete?.title || 'this reminder';
+    
+    console.log('Found reminder to delete:', reminderToDelete);
 
     Alert.alert(
       'Delete Reminder',
-      'Are you sure you want to delete this reminder?',
+      `Are you sure you want to delete "${reminderTitle}"?`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Cancel', 
+          style: 'cancel',
+          onPress: () => console.log('Delete canceled by user')
+        },
         { 
           text: 'Delete', 
           style: 'destructive',
-          onPress: async () => {
-            try {
-              console.log('Deleting reminder:', reminderId);
-              
-              // Cancel the notification first
-              await cancelNotification(reminderId);
-              
-              // Delete from Firestore
-              const reminderRef = doc(db, 'users', user.uid, 'reminders', reminderId);
-              await deleteDoc(reminderRef);
-              
-              console.log('Reminder deleted successfully');
-              Alert.alert('Success', 'Reminder deleted successfully!');
-            } catch (error) {
-              console.error('Error deleting reminder:', error);
-              Alert.alert('Error', 'Failed to delete reminder');
-            }
+          onPress: () => {
+            console.log('Delete confirmed by user, proceeding with deletion');
+            handleDeleteConfirmation(reminderId);
           }
         }
       ]
     );
   };
 
+  const handleDeleteConfirmation = async (reminderId) => {
+    const user = auth.currentUser;
+    if (!user) {
+      Alert.alert('Error', 'You must be logged in to delete reminders');
+      return;
+    }
+
+    console.log('Attempting to delete reminder with ID:', reminderId);
+    
+    try {
+      setDeleteLoadingId(reminderId);
+      
+      // Cancel the scheduled notification first
+      console.log('Canceling notification for reminder:', reminderId);
+      await cancelNotification(reminderId);
+      
+      // Delete from Firestore
+      console.log('Deleting from Firestore. User ID:', user.uid, 'Reminder ID:', reminderId);
+      const reminderRef = doc(db, 'users', user.uid, 'reminders', reminderId);
+      await deleteDoc(reminderRef);
+      
+      console.log('Successfully deleted reminder from Firestore');
+      
+      // Also manually update the local state immediately for better UX
+      setReminders(prevReminders => {
+        const updatedReminders = prevReminders.filter(reminder => reminder.id !== reminderId);
+        console.log('Updated local state. Remaining reminders:', updatedReminders.length);
+        return updatedReminders;
+      });
+      
+      setTimeout(() => {
+        Alert.alert('Success', 'Reminder deleted successfully');
+      }, 100);
+      
+    } catch (error) {
+      console.error("Error deleting reminder:", error);
+      console.error("Error details:", error.message);
+      Alert.alert('Error', `Failed to delete reminder: ${error.message}`);
+      
+      // Reload reminders to ensure UI is in sync
+      console.log('Reloading reminders due to error...');
+      const unsubscribe = loadReminders();
+      if (unsubscribe) {
+        // Clean up previous listener if it exists
+        setTimeout(() => unsubscribe(), 100);
+      }
+    } finally {
+      setDeleteLoadingId(null);
+    }
+  };
+
+  // Fixed calendar grid calculation to ensure all days show properly
   const getDaysInMonth = (date) => {
     const year = date.getFullYear();
     const month = date.getMonth();
@@ -434,14 +427,20 @@ const Calendar = ({ navigation }) => {
 
     const days = [];
     
-    // Add empty days for padding
+    // Add empty cells for days before the first day of the month
     for (let i = 0; i < startingDayOfWeek; i++) {
       days.push(null);
     }
     
-    // Add actual days of the month
+    // Add all days of the month
     for (let day = 1; day <= daysInMonth; day++) {
       days.push(new Date(year, month, day));
+    }
+
+    // Ensure we have complete weeks (multiples of 7)
+    // This ensures Saturday column is always visible
+    while (days.length % 7 !== 0) {
+      days.push(null);
     }
 
     return days;
@@ -502,121 +501,103 @@ const Calendar = ({ navigation }) => {
     }
   };
 
-  const renderCalendarItem = ({ item, index }) => (
-    <TouchableOpacity
-      style={[
-        styles.calendarDay,
-        item && getRemindersForDate(item).length > 0 && styles.dayWithReminders,
-        item && isToday(item) && styles.today,
-        item && 
-        item.getDate() === selectedDate.getDate() &&
-        item.getMonth() === selectedDate.getMonth() &&
-        item.getFullYear() === selectedDate.getFullYear() && 
-        styles.selectedDay,
-      ]}
-      onPress={() => handleDateSelect(item)}
-      disabled={!item}
-    >
-      {item && (
-        <>
-          <Text
-            style={[
-              styles.dayText,
-              item && isToday(item) && styles.todayText,
-              item.getDate() === selectedDate.getDate() &&
-              item.getMonth() === selectedDate.getMonth() &&
-              item.getFullYear() === selectedDate.getFullYear() && 
-              styles.selectedDayText,
-            ]}
-          >
-            {item.getDate()}
-          </Text>
-          {getRemindersForDate(item).length > 0 && (
-            <View style={styles.reminderIndicator}>
-              <Text style={styles.reminderCount}>
-                {getRemindersForDate(item).length}
-              </Text>
-            </View>
-          )}
-        </>
-      )}
-    </TouchableOpacity>
-  );
-
-  const renderReminderItem = ({ item }) => (
-    <TouchableOpacity
-      style={[
+  const renderReminderItem = ({ item }) => {
+    const isDeleting = deleteLoadingId === item.id;
+    
+    console.log('Rendering reminder item:', item.id, 'isDeleting:', isDeleting);
+    
+    return (
+      <View style={[
         styles.reminderCard,
         item.date < new Date() && styles.pastReminderCard
-      ]}
-      onPress={() => openEditReminderModal(item)}
-      onLongPress={() => deleteReminder(item.id)}
-    >
-      <View style={styles.reminderContent}>
-        <View style={styles.reminderHeader}>
-          <Ionicons 
-            name="notifications" 
-            size={20} 
-            color={item.date < new Date() ? Colors.gray : Colors.blue} 
-          />
-          <Text style={[
-            styles.reminderTitle,
-            item.date < new Date() && styles.pastReminderText
-          ]}>
-            {item.title}
-          </Text>
-        </View>
+      ]}>
+        <TouchableOpacity 
+          style={styles.reminderContent}
+          onPress={() => !isDeleting && openEditReminderModal(item)}
+          disabled={isDeleting}
+        >
+          <View style={styles.reminderHeader}>
+            <Ionicons 
+              name="notifications" 
+              size={20} 
+              color={item.date < new Date() ? Colors.gray : Colors.blue} 
+            />
+            <Text style={[
+              styles.reminderTitle,
+              item.date < new Date() && styles.pastReminderText
+            ]}>
+              {item.title}
+            </Text>
+          </View>
+          
+          {item.description ? (
+            <Text style={[
+              styles.reminderDescription,
+              item.date < new Date() && styles.pastReminderText
+            ]}>
+              {item.description}
+            </Text>
+          ) : null}
+          
+          <View style={styles.reminderFooter}>
+            <Text style={[
+              styles.reminderDateTime,
+              item.date < new Date() && styles.pastReminderText
+            ]}>
+              {formatDateTime(item.date)}
+            </Text>
+            {item.date < new Date() && (
+              <Text style={styles.pastLabel}>Past</Text>
+            )}
+          </View>
+        </TouchableOpacity>
         
-        {item.description ? (
-          <Text style={[
-            styles.reminderDescription,
-            item.date < new Date() && styles.pastReminderText
-          ]}>
-            {item.description}
-          </Text>
-        ) : null}
-        
-        <View style={styles.reminderFooter}>
-          <Text style={[
-            styles.reminderDateTime,
-            item.date < new Date() && styles.pastReminderText
-          ]}>
-            {formatDateTime(item.date)}
-          </Text>
-          {item.date < new Date() && (
-            <Text style={styles.pastLabel}>Past</Text>
-          )}
+        <View style={styles.reminderActions}>
+          <TouchableOpacity 
+            onPress={() => {
+              console.log('Edit button pressed for reminder:', item.id);
+              if (!isDeleting && !isLoading) {
+                openEditReminderModal(item);
+              }
+            }}
+            style={[styles.actionButton, (isLoading || isDeleting) && styles.disabledButton]}
+            disabled={isLoading || isDeleting}
+          >
+            <Ionicons 
+              name="create-outline" 
+              size={18} 
+              color={(isLoading || isDeleting) ? Colors.lightGray : Colors.blue} 
+            />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            onPress={() => {
+              console.log('Delete button pressed for reminder:', item.id);
+              if (!isDeleting && !isLoading) {
+                deleteReminder(item.id);
+              }
+            }}
+            style={[styles.actionButton, (isLoading || isDeleting) && styles.disabledButton]}
+            disabled={isLoading || isDeleting}
+            activeOpacity={0.7}
+          >
+            {isDeleting ? (
+              <ActivityIndicator size="small" color={Colors.red} />
+            ) : (
+              <Ionicons name="trash-outline" size={18} color={Colors.red} />
+            )}
+          </TouchableOpacity>
         </View>
       </View>
-      
-      <View style={styles.reminderActions}>
-        <TouchableOpacity 
-          onPress={() => openEditReminderModal(item)}
-          style={styles.actionButton}
-        >
-          <Ionicons name="create-outline" size={18} color={Colors.blue} />
-        </TouchableOpacity>
-        <TouchableOpacity 
-          onPress={() => deleteReminder(item.id)}
-          style={styles.actionButton}
-        >
-          <Ionicons name="trash-outline" size={18} color={Colors.red} />
-        </TouchableOpacity>
-      </View>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   const days = getDaysInMonth(currentDate);
   const selectedDateReminders = getRemindersForDate(selectedDate);
 
   return (
     <View style={styles.container}>
-      {/* Calendar Header */}
       <View style={styles.calendarHeader}>
-        <TouchableOpacity 
-          onPress={() => navigateMonth(-1)}
-          style={styles.navButton}
-        >
+        <TouchableOpacity onPress={() => navigateMonth(-1)} style={styles.navButton}>
           <Ionicons name="chevron-back" size={24} color={Colors.blue} />
         </TouchableOpacity>
         
@@ -624,42 +605,73 @@ const Calendar = ({ navigation }) => {
           {currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
         </Text>
         
-        <TouchableOpacity 
-          onPress={() => navigateMonth(1)}
-          style={styles.navButton}
-        >
+        <TouchableOpacity onPress={() => navigateMonth(1)} style={styles.navButton}>
           <Ionicons name="chevron-forward" size={24} color={Colors.blue} />
         </TouchableOpacity>
       </View>
 
-      {/* Days of Week Header */}
       <View style={styles.daysHeader}>
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
           <Text key={day} style={styles.dayHeaderText}>{day}</Text>
         ))}
       </View>
 
-      {/* Calendar Grid */}
-      <View style={styles.calendarContainer}>
-        <FlatList
-          data={days}
-          renderItem={renderCalendarItem}
-          numColumns={7}
-          keyExtractor={(item, index) => index.toString()}
-          scrollEnabled={false}
-        />
+      <View style={styles.calendarGrid}>
+        {days.map((day, index) => {
+          const hasReminders = day && getRemindersForDate(day).length > 0;
+          const isTodayFlag = day && isToday(day);
+          const isSelected = day && 
+            day.getDate() === selectedDate.getDate() &&
+            day.getMonth() === selectedDate.getMonth() &&
+            day.getFullYear() === selectedDate.getFullYear();
+
+          return (
+            <TouchableOpacity
+              key={index}
+              style={[
+                styles.calendarDay,
+                hasReminders && styles.dayWithReminders,
+                isTodayFlag && styles.today,
+                isSelected && styles.selectedDay,
+                !day && styles.emptyDay,
+              ]}
+              onPress={() => handleDateSelect(day)}
+              disabled={!day}
+            >
+              {day && (
+                <>
+                  <Text
+                    style={[
+                      styles.dayText,
+                      isTodayFlag && styles.todayText,
+                      isSelected && styles.selectedDayText,
+                    ]}
+                  >
+                    {day.getDate()}
+                  </Text>
+                  {hasReminders && (
+                    <View style={styles.reminderIndicator}>
+                      <Text style={styles.reminderCount}>
+                        {getRemindersForDate(day).length}
+                      </Text>
+                    </View>
+                  )}
+                </>
+              )}
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
-      {/* Add Reminder Button */}
       <TouchableOpacity 
-        style={styles.addButton}
+        style={[styles.addButton, isLoading && styles.disabledButton]}
         onPress={openAddReminderModal}
+        disabled={isLoading}
       >
         <Ionicons name="add" size={24} color="white" />
         <Text style={styles.addButtonText}>Add Reminder</Text>
       </TouchableOpacity>
 
-      {/* Selected Date Reminders */}
       <View style={styles.selectedDateSection}>
         <View style={styles.sectionHeader}>
           <Text style={styles.selectedDateTitle}>
@@ -675,12 +687,6 @@ const Calendar = ({ navigation }) => {
             <ActivityIndicator size="large" color={Colors.blue} />
             <Text style={styles.loadingText}>Loading reminders...</Text>
           </View>
-        ) : remindersError ? (
-          <View style={styles.errorContainer}>
-            <Ionicons name="alert-circle" size={48} color={Colors.red} />
-            <Text style={styles.errorText}>Error loading reminders</Text>
-            <Text style={styles.errorSubtext}>{remindersError}</Text>
-          </View>
         ) : selectedDateReminders.length === 0 ? (
           <View style={styles.noRemindersContainer}>
             <Ionicons name="notifications-off-outline" size={48} color={Colors.lightGray} />
@@ -694,11 +700,11 @@ const Calendar = ({ navigation }) => {
             keyExtractor={(item) => item.id}
             showsVerticalScrollIndicator={false}
             style={styles.remindersList}
+            extraData={[isLoading, deleteLoadingId]}
           />
         )}
       </View>
 
-      {/* Add/Edit Reminder Modal */}
       <Modal
         visible={showReminderModal}
         animationType="slide"
@@ -774,13 +780,7 @@ const Calendar = ({ navigation }) => {
                 <Text style={styles.previewText}>
                   Reminder will be set for: {"\n"}
                   <Text style={styles.previewDateTime}>
-                    {formatDateTime(new Date(
-                      newReminder.date.getFullYear(),
-                      newReminder.date.getMonth(),
-                      newReminder.date.getDate(),
-                      newReminder.time.getHours(),
-                      newReminder.time.getMinutes()
-                    ))}
+                    {formatDateTime(newReminder.date)}
                   </Text>
                 </Text>
               </View>
@@ -815,28 +815,26 @@ const Calendar = ({ navigation }) => {
             </View>
           </ScrollView>
         </View>
-
-        {/* Date Picker */}
-        {showDatePicker && (
-          <DateTimePicker
-            value={newReminder.date}
-            mode="date"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={handleDateChange}
-            minimumDate={new Date()}
-          />
-        )}
-
-        {/* Time Picker */}
-        {showTimePicker && (
-          <DateTimePicker
-            value={newReminder.time}
-            mode="time"
-            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-            onChange={handleTimeChange}
-          />
-        )}
       </Modal>
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={newReminder.date}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={handleDateChange}
+          minimumDate={new Date()}
+        />
+      )}
+
+      {showTimePicker && (
+        <DateTimePicker
+          value={newReminder.time}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={handleTimeChange}
+        />
+      )}
     </View>
   );
 };
@@ -876,43 +874,50 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.black,
   },
-  calendarContainer: {
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     backgroundColor: '#fff',
-    maxHeight: 300,
-    paddingHorizontal: 10,
+    paddingHorizontal: 5,
+    paddingVertical: 5,
   },
   calendarDay: {
-    flex: 1,
+    width: '14.28%', // This ensures exactly 7 columns (100% / 7)
     aspectRatio: 1,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 0.5,
     borderColor: '#e9ecef',
     margin: 1,
+    borderRadius: 4,
   },
-  dayWithReminders: {
-    backgroundColor: '#fff3cd',
-  },
-  today: {
-    backgroundColor: '#e3f2fd',
-    borderColor: Colors.blue,
-    borderWidth: 2,
-  },
-  selectedDay: {
-    backgroundColor: Colors.blue,
+  emptyDay: {
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
   },
   dayText: {
     fontSize: 16,
     color: Colors.black,
     fontWeight: '500',
   },
+  today: {
+    backgroundColor: '#e3f2fd',
+    borderColor: Colors.blue,
+    borderWidth: 2,
+  },
   todayText: {
     fontWeight: 'bold',
     color: Colors.blue,
   },
+  selectedDay: {
+    backgroundColor: Colors.blue,
+  },
   selectedDayText: {
     color: 'white',
     fontWeight: 'bold',
+  },
+  dayWithReminders: {
+    backgroundColor: '#fff3cd',
   },
   reminderIndicator: {
     position: 'absolute',
@@ -980,24 +985,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 16,
     color: Colors.blue,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-  },
-  errorText: {
-    fontSize: 16,
-    color: Colors.red,
-    marginTop: 10,
-    textAlign: 'center',
-  },
-  errorSubtext: {
-    fontSize: 14,
-    color: Colors.gray,
-    marginTop: 5,
-    textAlign: 'center',
   },
   noRemindersContainer: {
     flex: 1,
@@ -1214,3 +1201,5 @@ const styles = StyleSheet.create({
     color: Colors.lightGray,
   },
 });
+
+export default Calendar;

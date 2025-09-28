@@ -14,7 +14,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "../Constants/Colors";
-import firestore from '@react-native-firebase/firestore';
+import { auth, db } from "./firebaseConfig";
+import { doc, setDoc, getDoc, updateDoc, collection, addDoc } from 'firebase/firestore';
 
 const { width, height } = Dimensions.get('window');
 
@@ -22,86 +23,132 @@ export default function TodoList({ navigation, route }) {
   const [todoItems, setTodoItems] = useState([]);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [newTodoText, setNewTodoText] = useState('');
-  const [currentListId, setCurrentListId] = useState(null);
+  const [listTitle, setListTitle] = useState('');
+  const [listColor, setListColor] = useState(Colors.blue);
+  const [listId, setListId] = useState(null);
+  const [isNewList, setIsNewList] = useState(true);
   const newItemInputRef = useRef(null);
 
-  // Get the list name from route params or use default
-  const listName = route.params?.listName || 'New TodoList';
+  // Get parameters from route
+  const { title, color, listid } = route.params || {};
 
   useLayoutEffect(() => {
+    // Set up header with save button
     navigation.setOptions({
-      title: listName,
+      title: listTitle || 'New Todo List',
       headerRight: () => (
-        <TouchableOpacity onPress={startAddingNew} style={styles.headerButton}>
-          <Ionicons name="add" size={28} color="white" />
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity onPress={startAddingNew} style={styles.headerButton}>
+            <Ionicons name="add" size={28} color="white" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={saveTodoList} style={styles.headerButton}>
+            <Ionicons name="checkmark" size={28} color="white" />
+          </TouchableOpacity>
+        </View>
       ),
     });
-  }, [navigation, listName]);
+  }, [navigation, listTitle, todoItems]);
 
-  // Load todos from Firestore when component mounts or listName changes
+  // Initialize list data when component mounts
   useEffect(() => {
-    loadTodosFromFirestore();
-  }, [listName]);
+    const initializeList = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
 
-  // Save todos to Firestore whenever todoItems changes
-  useEffect(() => {
-    if (currentListId && todoItems.length > 0) {
-      saveTodosToFirestore();
-    }
-  }, [todoItems, currentListId]);
-
-  const loadTodosFromFirestore = async () => {
-    try {
-      // Query for the todo list with the given name
-      const listsRef = firestore().collection('todoLists');
-      const querySnapshot = await listsRef.where('name', '==', listName).get();
-      
-      if (!querySnapshot.empty) {
-        // List exists, get the first matching document
-        const listDoc = querySnapshot.docs[0];
-        setCurrentListId(listDoc.id);
-        
-        const listData = listDoc.data();
-        if (listData.items && Array.isArray(listData.items)) {
-          setTodoItems(listData.items);
-        } else {
-          setTodoItems([]);
-        }
+      if (listid) {
+        // Existing list - load data
+        setIsNewList(false);
+        setListId(listid);
+        setListTitle(title || 'Todo List');
+        setListColor(color || Colors.blue);
+        await loadTodoList(listid);
       } else {
-        // List doesn't exist, create a new one
-        const newListRef = await listsRef.add({
-          name: listName,
-          items: [],
-          createdAt: firestore.FieldValue.serverTimestamp(),
-          updatedAt: firestore.FieldValue.serverTimestamp()
-        });
-        setCurrentListId(newListRef.id);
+        // New list - initialize with default values
+        setIsNewList(true);
+        setListTitle(title || 'New Todo List');
+        setListColor(color || Colors.blue);
         setTodoItems([]);
       }
+    };
+
+    initializeList();
+  }, [listid, title, color]);
+
+  const loadTodoList = async (id) => {
+    try {
+      const user = auth.currentUser;
+      if (!user) return;
+
+      const listDocRef = doc(db, "users", user.uid, "lists", id);
+      const listDoc = await getDoc(listDocRef);
+      
+      if (listDoc.exists()) {
+        const listData = listDoc.data();
+        setTodoItems(listData.items || []);
+        setListTitle(listData.title || 'Todo List');
+        setListColor(listData.color || Colors.blue);
+      }
     } catch (error) {
-      console.error('Error loading todos:', error);
-      Alert.alert("Error", "Failed to load todos");
+      console.error('Error loading todo list:', error);
+      Alert.alert("Error", "Failed to load todo list");
     }
   };
 
-  const saveTodosToFirestore = async () => {
+  const saveTodoList = async () => {
     try {
-      if (!currentListId) return;
+      const user = auth.currentUser;
+      if (!user) return;
 
-      await firestore().collection('todoLists').doc(currentListId).update({
+      if (!listTitle.trim()) {
+        Alert.alert("Error", "Please enter a title for your todo list");
+        return;
+      }
+
+      const listData = {
+        title: listTitle.trim(),
+        color: listColor,
         items: todoItems,
-        updatedAt: firestore.FieldValue.serverTimestamp()
-      });
+        updatedAt: new Date(),
+        createdAt: new Date()
+      };
+
+      if (isNewList) {
+        // Create new list
+        const userListsRef = collection(db, "users", user.uid, "lists");
+        const docRef = await addDoc(userListsRef, listData);
+        setListId(docRef.id);
+        setIsNewList(false);
+        
+        Alert.alert("Success", "Todo list created successfully!");
+      } else {
+        // Update existing list
+        const listDocRef = doc(db, "users", user.uid, "lists", listId);
+        await updateDoc(listDocRef, {
+          ...listData,
+          updatedAt: new Date()
+        });
+        
+        Alert.alert("Success", "Todo list updated successfully!");
+      }
+
+      // Navigate back to home after saving
+      setTimeout(() => {
+        navigation.goBack();
+      }, 500);
+
     } catch (error) {
-      console.error('Error saving todos:', error);
-      Alert.alert("Error", "Failed to save todos");
+      console.error('Error saving todo list:', error);
+      Alert.alert("Error", "Failed to save todo list");
     }
   };
 
   const startAddingNew = () => {
     setIsAddingNew(true);
     setNewTodoText('');
+    // Focus the input after a short delay
+    setTimeout(() => {
+      newItemInputRef.current?.focus();
+    }, 100);
   };
 
   const cancelAddingNew = () => {
@@ -110,28 +157,27 @@ export default function TodoList({ navigation, route }) {
     Keyboard.dismiss();
   };
 
-  const addNewTodo = async () => {
+  const addNewTodo = () => {
     if (!newTodoText.trim()) return;
 
     const newTodo = {
       id: Date.now().toString(),
       text: newTodoText.trim(),
       isChecked: false,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: new Date()
     };
 
-    const updatedItems = [...todoItems, newTodo];
-    setTodoItems(updatedItems);
+    setTodoItems(prevItems => [...prevItems, newTodo]);
     setIsAddingNew(false);
     setNewTodoText('');
+    Keyboard.dismiss();
   };
 
   const toggleItemChecked = (itemId) => {
     setTodoItems(prevItems => 
       prevItems.map(item => 
         item.id === itemId 
-          ? { ...item, isChecked: !item.isChecked, updatedAt: new Date() }
+          ? { ...item, isChecked: !item.isChecked }
           : item
       )
     );
@@ -143,7 +189,7 @@ export default function TodoList({ navigation, route }) {
     setTodoItems(prevItems => 
       prevItems.map(item => 
         item.id === itemId 
-          ? { ...item, text: newText.trim(), updatedAt: new Date() }
+          ? { ...item, text: newText.trim() }
           : item
       )
     );
@@ -170,9 +216,21 @@ export default function TodoList({ navigation, route }) {
   const totalCount = todoItems.length;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: listColor + '20' }]}>
       <StatusBar barStyle="dark-content" />
       
+      {/* List Title Input */}
+      <View style={styles.titleContainer}>
+        <TextInput
+          style={styles.titleInput}
+          value={listTitle}
+          onChangeText={setListTitle}
+          placeholder="Enter todo list title"
+          placeholderTextColor={Colors.gray}
+          maxLength={50}
+        />
+      </View>
+
       {/* Stats Header */}
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
@@ -197,7 +255,7 @@ export default function TodoList({ navigation, route }) {
         </View>
       </View>
 
-      {/* New Todo Input (shown at top when adding) */}
+      {/* New Todo Input */}
       {isAddingNew && (
         <View style={styles.newTodoContainer}>
           <View style={styles.newTodoCard}>
@@ -357,15 +415,32 @@ const TodoItemCard = ({ item, onToggle, onTextChange, onDelete }) => {
   );
 };
 
-// ... (styles remain the same)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.white,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   headerButton: {
-    marginRight: 15,
+    marginLeft: 15,
     padding: 5,
+  },
+  titleContainer: {
+    padding: 15,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.lightGray,
+  },
+  titleInput: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.black,
+    padding: 12,
+    backgroundColor: Colors.lightestGray,
+    borderRadius: 8,
+    textAlign: 'center',
   },
   statsContainer: {
     flexDirection: 'row',

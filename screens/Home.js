@@ -14,7 +14,6 @@ import Colors from "../Constants/Colors";
 import { auth, db } from "./firebaseConfig";
 import { collection, onSnapshot, addDoc, doc, deleteDoc, updateDoc, query, orderBy } from 'firebase/firestore';
 
-
 const colorOptions = [
   Colors.blue,
   Colors.green,
@@ -139,6 +138,7 @@ const ListButton = ({ title, color, onEdit, onDelete, navigation, listid, type, 
           color 
         });
       } else {
+        // Simply navigate to the existing TodoList without creating a new one
         navigation.navigate("TodoList", { 
           title, 
           color, 
@@ -373,32 +373,25 @@ export default function Home({ navigation }) {
   }, []);
 
   const handleTypeSelect = async (type) => {
-    const user = auth.currentUser;
-    if (!user) return;
+  const user = auth.currentUser;
+  if (!user) return;
 
-    if (type === 'todo') {
-      const userListsRef = collection(db, "users", user.uid, "lists");
-      const docRef = await addDoc(userListsRef, { 
-        title: 'New Todo List',
-        color: Colors.blue,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        items: []
-      });
-      navigation.navigate("TodoList", { 
-        title: 'New Todo List', 
-        color: Colors.blue, 
-        listid: docRef.id 
-      });
-    } else {
-      // Navigate to NotesScreen for creation
-      navigation.navigate("NotesScreen", { 
-        title: 'New Note', 
-        noteId: null,
-        color: Colors.blue
-      });
-    }
-  };
+  if (type === 'todo') {
+    // Navigate to TodoList screen for creation without automatically creating a new list
+    navigation.navigate("TodoList", { 
+      title: 'New Todo List', 
+      color: Colors.blue, 
+      listid: null // Pass null to indicate it's a new list
+    });
+  } else {
+    // Navigate to NotesScreen for creation
+    navigation.navigate("NotesScreen", { 
+      title: 'New Note', 
+      noteId: null,
+      color: Colors.blue
+    });
+  }
+};
 
   const updateItem = async (id, type, updates) => {
     const user = auth.currentUser;

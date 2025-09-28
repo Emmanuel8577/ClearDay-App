@@ -77,7 +77,7 @@ export default function Settings({ navigation }) {
 
         {/* App Info */}
         <View style={styles.appInfoContainer}>
-          <Text style={styles.appInfoTitle}>Fire-App</Text>
+          <Text style={styles.appInfoTitle}>ClearDay-App</Text>
           <Text style={styles.appInfoVersion}>Version 1.0.0</Text>
           <Text style={styles.appInfoDescription}>
             Your personal notes and todo management app

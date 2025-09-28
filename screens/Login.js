@@ -56,11 +56,13 @@ export default function LoginScreen() {
     });
     const [passwordField, setPasswordField] = useState({
         text: "",
-        errorMessage: ""
+        errorMessage: "",
+        secureTextEntry: true
     });
     const [passwordReentryField, setPasswordReentryField] = useState({
         text: "",
-        errorMessage: ""
+        errorMessage: "",
+        secureTextEntry: true
     });
 
     const handleSubmit = async () => {
@@ -109,10 +111,24 @@ export default function LoginScreen() {
         setIsLoading(false);
     };
 
+    const togglePasswordVisibility = () => {
+        setPasswordField(prev => ({
+            ...prev,
+            secureTextEntry: !prev.secureTextEntry
+        }));
+    };
+
+    const togglePasswordReentryVisibility = () => {
+        setPasswordReentryField(prev => ({
+            ...prev,
+            secureTextEntry: !prev.secureTextEntry
+        }));
+    };
+
     return (
         <View style={styles.container}>
             <LinearGradient
-                colors={['#667eea', '#764ba2']}
+                colors={['#051765c3', '#1c0533ff']}
                 style={styles.gradientBackground}
             >
                 <KeyboardAvoidingView 
@@ -123,7 +139,7 @@ export default function LoginScreen() {
                         <View style={styles.headerContainer}>
                             <View style={styles.logoContainer}>
                                 <Text style={styles.logoEmoji}>🔥</Text>
-                                <Text style={styles.logoText}>Todo</Text>
+                                <Text style={styles.logoText}>ClearDay</Text>
                             </View>
                             <Text style={styles.subtitle}>
                                 {isCreateMode ? "Create your account" : "Welcome back"}
@@ -149,12 +165,17 @@ export default function LoginScreen() {
                                     label="Password"
                                     text={passwordField.text}
                                     onChangeText={(text) => {
-                                        setPasswordField({ text, errorMessage: "" });
+                                        setPasswordField({ ...passwordField, text, errorMessage: "" });
                                     }}
-                                    secureTextEntry={true}
+                                    secureTextEntry={passwordField.secureTextEntry}
                                     errorMessage={passwordField.errorMessage}
                                     labelStyle={styles.label}
                                     autoCompleteType="password"
+                                    rightIcon={
+                                        <TouchableOpacity onPress={togglePasswordVisibility}>
+                                            <Text style={styles.eyeIcon}>{passwordField.secureTextEntry ? "👁️" : "🔒"}</Text>
+                                        </TouchableOpacity>
+                                    }
                                 />
                                 
                                 {isCreateMode && (
@@ -162,11 +183,16 @@ export default function LoginScreen() {
                                         label="Re-enter Password"
                                         text={passwordReentryField.text}
                                         onChangeText={(text) => {
-                                            setPasswordReentryField({ text, errorMessage: "" });
+                                            setPasswordReentryField({ ...passwordReentryField, text, errorMessage: "" });
                                         }}
-                                        secureTextEntry={true}
+                                        secureTextEntry={passwordReentryField.secureTextEntry}
                                         errorMessage={passwordReentryField.errorMessage}
                                         labelStyle={styles.label}
+                                        rightIcon={
+                                            <TouchableOpacity onPress={togglePasswordReentryVisibility}>
+                                                <Text style={styles.eyeIcon}>{passwordReentryField.secureTextEntry ? "👁️" : "🔒"}</Text>
+                                            </TouchableOpacity>
+                                        }
                                     />
                                 )}
 
@@ -220,11 +246,11 @@ const styles = StyleSheet.create({
     },
     logoContainer: {
         alignItems: 'center',
-        marginBottom: 20,
+        marginBottom: 16,
     },
     logoEmoji: {
         fontSize: 60,
-        marginBottom: 10,
+        marginBottom: 7,
     },
     logoText: {
         fontSize: 48,
@@ -235,10 +261,10 @@ const styles = StyleSheet.create({
         textShadowRadius: 4,
     },
     subtitle: {
-        fontSize: 18,
+        fontSize: 24,
         color: 'rgba(255, 255, 255, 0.9)',
         textAlign: 'center',
-        fontWeight: '300',
+        fontWeight: '400',
     },
     formCard: {
         backgroundColor: 'white',
@@ -291,5 +317,9 @@ const styles = StyleSheet.create({
         color: '#667eea',
         fontSize: 16,
         fontWeight: '600',
+    },
+    eyeIcon: {
+        fontSize: 18,
+        paddingHorizontal: 10,
     },
 });
