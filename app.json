@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "ClearDay",
-    "slug": "ClearDay",
+    "slug": "TodoApp",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -30,6 +30,7 @@
       "eas": {
         "projectId": "91b7ed96-a038-4937-b4b9-5df9da0487f7"
       }
-    }
+    },
+    "owner": "emmanuel30"
   }
 }
