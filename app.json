@@ -1,12 +1,12 @@
 {
   "expo": {
     "name": "ClearDay",
-    "slug": "TodoApp",
+    "slug": "clearday",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -26,11 +26,11 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "owner": "logirate-2",
     "extra": {
       "eas": {
-        "projectId": "91b7ed96-a038-4937-b4b9-5df9da0487f7"
+        "projectId": "5007303a-e2df-44fe-b0a4-2e41a35b4f4a"
       }
-    },
-    "owner": "emmanuel30"
+    }
   }
 }
