@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "sdkVersion": "53.0.0",
+    "name": "ClearDay",
+    "slug": "clearday",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/splash-icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#001F3F" 
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.emmanuel.clearday"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/splash-icon.png",
+        "backgroundColor": "#001F3F"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.emmanuel.clearday",
+      "versionCode": 1
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/splash-icon.png",
+          "color": "#ffffff",
+          "sounds": [
+            "./assets/sounds/alarm_tone_1.mp3",
+            "./assets/sounds/alarm_tone_2.mp3",
+            "./assets/sounds/alarm_tone_3.mp3",
+            "./assets/sounds/alarm_tone_4.mp3",
+            "./assets/sounds/alarm_tone_5.mp3",
+            "./assets/sounds/alarm_tone_6.mp3",
+            "./assets/sounds/alarm_tone_7.mp3",
+            "./assets/sounds/alarm_tone_8.mp3",
+            "./assets/sounds/alarm_tone_9.mp3",
+            "./assets/sounds/alarm_tone_10.mp3"
+          ]
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "40fd9e72-22d1-44d3-b543-3c81fd85b2df"
+      }
+    }
+  }
+}
