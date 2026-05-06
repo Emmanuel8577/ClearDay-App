@@ -7,19 +7,35 @@ import {
   ScrollView,
   Alert,
   Switch,
+  ActivityIndicator,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
-import Colors from "../Constants/Colors";
+import Colors, { lightTheme, darkTheme } from "../Constants/Colors";
+import { silentSync } from "../services/SyncService"; // Import your sync logic
 
 export default function Settings() {
-  const { user, isOnline, signOut } = useAuth();
+  const { user, isOnline, signOut, isDarkMode } = useAuth();
+  const theme = isDarkMode ? darkTheme : lightTheme;
+
   const [cacheSize, setCacheSize] = useState("Calculating...");
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncStatus, setSyncStatus] = useState({
+    success: true,
+    message: "Data Up-to-date",
+    lastTime: "",
+  });
 
   useEffect(() => {
     calculateCacheSize();
+    loadLastSyncStatus();
   }, []);
+
+  const loadLastSyncStatus = async () => {
+    const status = await AsyncStorage.getItem(`@sync_status_${user?.id}`);
+    if (status) setSyncStatus(JSON.parse(status));
+  };
 
   const calculateCacheSize = async () => {
     try {
@@ -32,6 +48,39 @@ export default function Settings() {
       setCacheSize(`${(totalSize / 1024).toFixed(2)} KB`);
     } catch (e) {
       setCacheSize("Unknown");
+    }
+  };
+
+  const handleManualSync = async () => {
+    if (!isOnline) {
+      return Alert.alert("Offline", "Please connect to the internet to sync.");
+    }
+
+    setSyncLoading(true);
+    try {
+      await silentSync(user.id);
+
+      const newStatus = {
+        success: true,
+        message: "Synchronized Successfully",
+        lastTime: new Date().toLocaleString(),
+      };
+
+      setSyncStatus(newStatus);
+      await AsyncStorage.setItem(
+        `@sync_status_${user?.id}`,
+        JSON.stringify(newStatus),
+      );
+      calculateCacheSize(); // Refresh size after sync
+    } catch (e) {
+      const failStatus = {
+        success: false,
+        message: "Sync Failed",
+        lastTime: new Date().toLocaleString(),
+      };
+      setSyncStatus(failStatus);
+    } finally {
+      setSyncLoading(false);
     }
   };
 
@@ -58,7 +107,12 @@ export default function Settings() {
           onPress: async () => {
             const keys = await AsyncStorage.getAllKeys();
             const dataKeys = keys.filter(
-              (k) => k !== "@user_session" && k !== "@user_theme",
+              (k) =>
+                ![
+                  "@current_session_user",
+                  "@user_theme",
+                  "@local_user_directory",
+                ].includes(k),
             );
             await AsyncStorage.multiRemove(dataKeys);
             calculateCacheSize();
@@ -69,23 +123,54 @@ export default function Settings() {
     );
   };
 
+  useEffect(() => {
+  const checkConnection = async () => {
+    // Force an alert so we can see it on the PHONE, not just terminal
+    const urlExists = !!process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const keyExists = !!process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+    console.log("--- Diagnostics ---", { urlExists, keyExists });
+
+    if (!urlExists || !keyExists) {
+      Alert.alert("Config Error", "Environment variables are missing!");
+      return;
+    }
+
+    const { data, error } = await supabase.from("notes").select("id").limit(1);
+
+    if (error) {
+      Alert.alert("Supabase Error", error.message);
+    } else {
+      Alert.alert("Success", "Supabase Connection is Live!");
+    }
+  };
+  checkConnection();
+}, []);
+
   const SettingItem = ({
     icon,
     title,
     value,
     onPress,
-    color = Colors.black,
+    color = theme.text,
     type = "chevron",
+    valueColor = Colors.lightGray,
   }) => (
-    <TouchableOpacity style={styles.item} onPress={onPress} disabled={!onPress}>
+    <TouchableOpacity
+      style={[styles.item, { borderBottomColor: isDarkMode ? "#333" : "#eee" }]}
+      onPress={onPress}
+      disabled={!onPress}
+    >
       <View style={styles.itemLeft}>
         <View style={[styles.iconBg, { backgroundColor: color + "15" }]}>
           <Ionicons name={icon} size={22} color={color} />
         </View>
-        <Text style={styles.itemTitle}>{title}</Text>
+        <Text style={[styles.itemTitle, { color: theme.text }]}>{title}</Text>
       </View>
       <View style={styles.itemRight}>
-        {value && <Text style={styles.itemValue}>{value}</Text>}
+        {value && (
+          <Text style={[styles.itemValue, { color: valueColor }]}>{value}</Text>
+        )}
         {type === "chevron" && (
           <Ionicons name="chevron-forward" size={20} color={Colors.lightGray} />
         )}
@@ -95,46 +180,81 @@ export default function Settings() {
   );
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.profileSection}>
+    <ScrollView
+      style={[
+        styles.container,
+        { backgroundColor: isDarkMode ? "#121212" : "#F8F9FB" },
+      ]}
+    >
+      <View style={[styles.profileSection, { backgroundColor: theme.surface }]}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {user?.email?.charAt(0).toUpperCase()}
+            {user?.displayName?.charAt(0).toUpperCase() ||
+              user?.email?.charAt(0).toUpperCase()}
           </Text>
         </View>
-        <Text style={styles.email}>{user?.email}</Text>
-        <View
+        <Text style={[styles.email, { color: theme.text }]}>{user?.email}</Text>
+
+        {/* Sync Status Badge */}
+        <TouchableOpacity
+          onPress={handleManualSync}
+          disabled={syncLoading}
           style={[
             styles.badge,
-            { backgroundColor: isOnline ? "#E8F5E9" : "#FFEBEE" },
+            { backgroundColor: syncStatus.success ? "#E8F5E9" : "#FFEBEE" },
           ]}
         >
-          <Text
-            style={[
-              styles.badgeText,
-              { color: isOnline ? "#2E7D32" : "#C62828" },
-            ]}
-          >
-            {isOnline ? "Online Sync Active" : "Offline Mode"}
-          </Text>
-        </View>
+          {syncLoading ? (
+            <ActivityIndicator size="small" color={Colors.blue} />
+          ) : (
+            <Text
+              style={[
+                styles.badgeText,
+                { color: syncStatus.success ? "#2E7D32" : "#C62828" },
+              ]}
+            >
+              {syncStatus.message}{" "}
+              {syncStatus.lastTime && `at ${syncStatus.lastTime}`}
+            </Text>
+          )}
+        </TouchableOpacity>
       </View>
 
-      <View style={styles.section}>
+      <View
+        style={[
+          styles.section,
+          {
+            backgroundColor: theme.surface,
+            borderColor: isDarkMode ? "#333" : "#eee",
+          },
+        ]}
+      >
         <Text style={styles.sectionTitle}>Connectivity & Data</Text>
+
+        <SettingItem
+          icon="cloud-upload-outline"
+          title="Sync to Cloud"
+          value={syncLoading ? "Syncing..." : "Tap to Sync"}
+          onPress={handleManualSync}
+          color={Colors.blue}
+          valueColor={syncStatus.success ? Colors.blue : Colors.red}
+        />
+
         <SettingItem
           icon="cloud-done-outline"
           title="Connection Status"
           value={isOnline ? "Stable" : "No Internet"}
-          color={Colors.blue}
+          color={Colors.green}
           type="switch"
         />
+
         <SettingItem
           icon="server-outline"
           title="Local Storage"
           value={cacheSize}
           color={Colors.purple}
         />
+
         <SettingItem
           icon="refresh-outline"
           title="Clear Local Cache"
@@ -143,13 +263,16 @@ export default function Settings() {
         />
       </View>
 
-      <View style={styles.section}>
+      <View
+        style={[
+          styles.section,
+          {
+            backgroundColor: theme.surface,
+            borderColor: isDarkMode ? "#333" : "#eee",
+          },
+        ]}
+      >
         <Text style={styles.sectionTitle}>Account</Text>
-        <SettingItem
-          icon="person-outline"
-          title="Profile Details"
-          color={Colors.teal}
-        />
         <SettingItem
           icon="log-out-outline"
           title="LogOut"
@@ -157,17 +280,17 @@ export default function Settings() {
           color={Colors.red}
         />
       </View>
-      <Text style={styles.version}>AllCurate v1.0.4 • Built for Nigeria</Text>
+
+      <Text style={styles.version}>Apex Technovate Ltd v1.0.4</Text>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F8F9FB" },
+  container: { flex: 1 },
   profileSection: {
     alignItems: "center",
     padding: 30,
-    backgroundColor: "white",
   },
   avatar: {
     width: 80,
@@ -179,20 +302,20 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   avatarText: { fontSize: 32, color: "white", fontWeight: "bold" },
-  email: { fontSize: 18, fontWeight: "700", color: Colors.black },
+  email: { fontSize: 18, fontWeight: "700" },
   badge: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
     borderRadius: 20,
     marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
   },
-  badgeText: { fontSize: 12, fontWeight: "bold" },
+  badgeText: { fontSize: 11, fontWeight: "bold", textAlign: "center" },
   section: {
     marginTop: 25,
-    backgroundColor: "white",
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: "#eee",
   },
   sectionTitle: {
     fontSize: 13,
@@ -210,7 +333,6 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     paddingHorizontal: 20,
     borderBottomWidth: 0.5,
-    borderBottomColor: "#eee",
   },
   itemLeft: { flexDirection: "row", alignItems: "center" },
   iconBg: {
@@ -221,9 +343,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginRight: 15,
   },
-  itemTitle: { fontSize: 16, color: Colors.black, fontWeight: "500" },
+  itemTitle: { fontSize: 16, fontWeight: "500" },
   itemRight: { flexDirection: "row", alignItems: "center" },
-  itemValue: { fontSize: 14, color: Colors.lightGray, marginRight: 10 },
+  itemValue: { fontSize: 14, marginRight: 10 },
   version: {
     textAlign: "center",
     color: Colors.lightGray,

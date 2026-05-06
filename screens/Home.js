@@ -35,13 +35,28 @@ export default function Home({ navigation }) {
   const loadAllData = async () => {
   setRefreshing(true);
   try {
-    // 1. Try to get the Index
-    const indexData = await AsyncStorage.getItem("@todo_lists_cache");
-    let combinedItems = indexData ? JSON.parse(indexData) : [];
+    let combinedItems = [];
+    const uid = user?.uid || "guest";
 
-    // 2. BACKUP: Scan all keys to find "hidden" notes
+    // 1. Fetch the Actual Todo Data Object (Matches TodoList.js logic)
+    const TODOS_STORAGE_KEY = `@todos_offline_data_${uid}`;
+    const todoDataRaw = await AsyncStorage.getItem(TODOS_STORAGE_KEY);
+    
+    if (todoDataRaw) {
+      const allTodoLists = JSON.parse(todoDataRaw);
+      // Convert the object { id: { title, tasks... } } into an array for the list
+      const parsedTodos = Object.keys(allTodoLists).map((id) => ({
+        id: id,
+        ...allTodoLists[id],
+        type: "todo",
+      }));
+      combinedItems = [...parsedTodos];
+    }
+
+    // 2. Scan all keys to find Notes (Since they use individual keys)
     const allKeys = await AsyncStorage.getAllKeys();
-    const noteKeys = allKeys.filter(key => key.startsWith("@notes_offline_data_"));
+    const NOTES_PREFIX = `@notes_offline_data_${uid}_`;
+    const noteKeys = allKeys.filter(key => key.startsWith(NOTES_PREFIX));
     
     if (noteKeys.length > 0) {
       const noteData = await AsyncStorage.multiGet(noteKeys);
@@ -49,19 +64,17 @@ export default function Home({ navigation }) {
         .map(([_, v]) => v ? { ...JSON.parse(v), type: "note" } : null)
         .filter(n => n && n.id);
 
-      // Merge notes into the index if they are missing
-      const existingIds = new Set(combinedItems.map(i => i.id));
-      parsedNotes.forEach(note => {
-        if (!existingIds.has(note.id)) {
-          combinedItems.push(note);
-        }
-      });
+      combinedItems = [...combinedItems, ...parsedNotes];
     }
 
-    // 3. Sort and Set State
+    // 3. Sort by date and Set State
     const finalItems = combinedItems
       .filter(item => item && item.id)
-      .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
+      .sort((a, b) => {
+        const dateA = new Date(a.updated_at || a.created_at || 0);
+        const dateB = new Date(b.updated_at || b.created_at || 0);
+        return dateB - dateA;
+      });
 
     setItems(finalItems);
   } catch (e) {
@@ -70,53 +83,42 @@ export default function Home({ navigation }) {
     setRefreshing(false);
   }
 };
-  const deleteItem = async (item) => {
-    Alert.alert(
-      "Delete Item",
-      `Are you sure you want to delete this ${item.type}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              if (item.type === "note") {
-                // Delete specific note file
-                await AsyncStorage.removeItem(
-                  `${NOTES_CACHE_PREFIX}${item.id}`,
-                );
-              } else {
-                // 1. Remove from Todo Index
-                const todoData = await AsyncStorage.getItem(TODO_CACHE_KEY);
-                let todos = todoData ? JSON.parse(todoData) : [];
-                todos = todos.filter((t) => t.id !== item.id);
-                await AsyncStorage.setItem(
-                  TODO_CACHE_KEY,
-                  JSON.stringify(todos),
-                );
 
-                // 2. Remove actual task data
-                const fullTodoData =
-                  await AsyncStorage.getItem(TODOS_STORAGE_KEY);
-                if (fullTodoData) {
-                  let allTasks = JSON.parse(fullTodoData);
-                  delete allTasks[item.id];
-                  await AsyncStorage.setItem(
-                    TODOS_STORAGE_KEY,
-                    JSON.stringify(allTasks),
-                  );
-                }
+  const deleteItem = async (item) => {
+  const uid = user?.uid || "guest";
+  const NOTES_PREFIX = `@notes_offline_data_${uid}_`;
+  const TODOS_STORAGE_KEY = `@todos_offline_data_${uid}`;
+
+  Alert.alert(
+    "Delete Item",
+    `Are you sure you want to delete this ${item.type}?`,
+    [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            if (item.type === "note") {
+              await AsyncStorage.removeItem(`${NOTES_PREFIX}${item.id}`);
+            } else {
+              // Get the whole object, remove the specific list ID, save it back
+              const fullTodoData = await AsyncStorage.getItem(TODOS_STORAGE_KEY);
+              if (fullTodoData) {
+                let allTasks = JSON.parse(fullTodoData);
+                delete allTasks[item.id];
+                await AsyncStorage.setItem(TODOS_STORAGE_KEY, JSON.stringify(allTasks));
               }
-              loadAllData(); // Refresh list
-            } catch (e) {
-              console.error("Delete Error", e);
             }
-          },
+            loadAllData(); // Refresh UI
+          } catch (e) {
+            console.error("Delete Error", e);
+          }
         },
-      ],
-    );
-  };
+      },
+    ],
+  );
+};
 
   useFocusEffect(
     useCallback(() => {
@@ -221,7 +223,7 @@ export default function Home({ navigation }) {
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <StatusBar barStyle="light-content" backgroundColor={theme.primary} />
       <View style={[styles.welcomeArea, { backgroundColor: theme.primary }]}>
-        <Text style={styles.welcomeText}>Hello, Emmanuel</Text>
+        <Text style={styles.welcomeText}>Hello, {user?.user_metadata?.display_name || user?.email?.split('@')[0] || "User"}</Text>
         <Text style={styles.subWelcome}>
           You have {items.length} items in your workspace.
         </Text>

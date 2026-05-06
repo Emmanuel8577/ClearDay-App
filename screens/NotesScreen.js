@@ -3,6 +3,7 @@ import React, {
   useEffect,
   useCallback,
   useLayoutEffect,
+  useRef,
 } from "react";
 import {
   View,
@@ -15,6 +16,7 @@ import {
   Platform,
   StatusBar,
   ActivityIndicator,
+  AppState, // Added for background saving
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -25,11 +27,12 @@ import { useAuth } from "../context/AuthContext";
 import Colors from "../Constants/Colors";
 import ColorSelector from "../components/ColorSelector";
 
-const NOTES_CACHE_KEY = "@notes_offline_data_";
-const LINE_HEIGHT = 30;
+const LINE_HEIGHT = 40;
 
 export default function NotesScreen({ navigation, route }) {
-  // 1. Get basic info from navigation
+  const { user, isOnline, isDarkMode } = useAuth();
+  const theme = isDarkMode ? darkTheme : lightTheme;
+
   const {
     noteId,
     initialTitle,
@@ -37,62 +40,156 @@ export default function NotesScreen({ navigation, route }) {
     color: initialColor,
   } = route.params || {};
 
-  // 2. State management
   const [title, setTitle] = useState(initialTitle || "");
   const [content, setContent] = useState(initialContent || "");
   const [noteColor, setNoteColor] = useState(initialColor || Colors.blue);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [inputHeight, setInputHeight] = useState(LINE_HEIGHT * 20);
 
-  const { user, isOnline, isDarkMode } = useAuth();
-  const theme = isDarkMode ? darkTheme : lightTheme;
+  // Refs for auto-saving the latest values
+  const latestTitle = useRef(title);
+  const latestContent = useRef(content);
 
+  const [history, setHistory] = useState([
+    { title: initialTitle || "", content: initialContent || "" },
+  ]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const isInternalUpdate = useRef(false);
+
+  const getNotesPrefix = () => `@notes_offline_data_${user?.uid || "guest"}_`;
   const colorOptions = ["blue", "red", "green", "orange", "purple", "teal"];
 
-  // 3. LOAD FULL CONTENT ON MOUNT
+  // --- AUTO-SAVE LOGIC ---
+
+  // 1. Persist Function
+  const persistData = async (newTitle, newContent, newColor = noteColor) => {
+    if (!noteId || !user) return;
+    try {
+      const noteData = {
+        id: noteId,
+        title: newTitle,
+        content: newContent,
+        color: newColor,
+        updated_at: new Date().toISOString(),
+      };
+      await AsyncStorage.setItem(`${getNotesPrefix()}${noteId}`, JSON.stringify(noteData));
+      syncToCloud(newTitle, newContent);
+    } catch (e) {
+      console.error("Save Error:", e);
+    }
+  };
+
+  // 2. Debounced Save (Triggers 1 second after typing stops)
+  const debouncedAutoSave = useCallback(
+    debounce((t, c) => {
+      persistData(t, c);
+    }, 1000),
+    [noteId, noteColor]
+  );
+
+  // 3. App State Listener (Saves if user minimizes app)
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      if (nextAppState.match(/inactive|background/)) {
+        persistData(latestTitle.current, latestContent.current);
+      }
+    });
+    return () => subscription.remove();
+  }, [noteId]);
+
+  // --- INITIAL LOAD ---
   useEffect(() => {
     const fetchFullNote = async () => {
-      if (!noteId) {
+      if (!noteId || !user) {
         setIsLoading(false);
         return;
       }
-
       try {
-        const storedData = await AsyncStorage.getItem(`${NOTES_CACHE_KEY}${noteId}`);
+        const storedData = await AsyncStorage.getItem(`${getNotesPrefix()}${noteId}`);
         if (storedData) {
           const parsed = JSON.parse(storedData);
           setTitle(parsed.title || "");
           setContent(parsed.content || "");
+          latestTitle.current = parsed.title || "";
+          latestContent.current = parsed.content || "";
           setNoteColor(parsed.color || initialColor || Colors.blue);
+          setHistory([{ title: parsed.title || "", content: parsed.content || "" }]);
         }
       } catch (e) {
-        console.error("Error loading note content:", e);
+        console.error("Error loading note:", e);
       } finally {
         setIsLoading(false);
       }
     };
-
     fetchFullNote();
-  }, [noteId]);
+  }, [noteId, user]);
 
-  // 4. Update Header UI
+  // --- UNDO / REDO ---
+  const addToHistory = (newTitle, newContent) => {
+    if (isInternalUpdate.current) {
+      isInternalUpdate.current = false;
+      return;
+    }
+    const lastEntry = history[historyIndex];
+    if (!lastEntry) return;
+
+    const isWordFinished = /\s$/.test(newContent);
+    if ((newContent !== lastEntry.content && isWordFinished) || newTitle !== lastEntry.title) {
+      const newHistory = history.slice(0, historyIndex + 1);
+      if (newHistory.length > 50) newHistory.shift();
+      setHistory([...newHistory, { title: newTitle, content: newContent }]);
+      setHistoryIndex(newHistory.length);
+    }
+  };
+
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      isInternalUpdate.current = true;
+      const prevStep = history[historyIndex - 1];
+      setTitle(prevStep.title);
+      setContent(prevStep.content);
+      latestTitle.current = prevStep.title;
+      latestContent.current = prevStep.content;
+      setHistoryIndex(historyIndex - 1);
+      persistData(prevStep.title, prevStep.content);
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < history.length - 1) {
+      isInternalUpdate.current = true;
+      const nextStep = history[historyIndex + 1];
+      setTitle(nextStep.title);
+      setContent(nextStep.content);
+      latestTitle.current = nextStep.title;
+      latestContent.current = nextStep.content;
+      setHistoryIndex(historyIndex + 1);
+      persistData(nextStep.title, nextStep.content);
+    }
+  };
+
   useLayoutEffect(() => {
     navigation.setOptions({
       headerTitle: "Notes",
       headerStyle: { backgroundColor: noteColor, elevation: 0 },
       headerTintColor: "#fff",
       headerRight: () => (
-        <TouchableOpacity
-          onPress={() => setShowColorPicker(!showColorPicker)}
-          style={{ marginRight: 15 }}
-        >
-          <Ionicons name="color-palette" size={24} color="white" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <TouchableOpacity onPress={handleUndo} disabled={historyIndex === 0} style={{ opacity: historyIndex === 0 ? 0.3 : 1, marginRight: 15 }}>
+            <Ionicons name="arrow-undo" size={22} color="white" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleRedo} disabled={historyIndex === history.length - 1} style={{ opacity: historyIndex === history.length - 1 ? 0.3 : 1, marginRight: 15 }}>
+            <Ionicons name="arrow-redo" size={22} color="white" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setShowColorPicker(!showColorPicker)} style={{ marginRight: 15 }}>
+            <Ionicons name="color-palette" size={24} color="white" />
+          </TouchableOpacity>
+        </View>
       ),
     });
-  }, [navigation, noteColor, showColorPicker]);
+  }, [navigation, noteColor, showColorPicker, historyIndex, history.length]);
 
-  // 5. Cloud Sync Logic
   const syncToCloud = useCallback(
     debounce(async (t, c) => {
       if (!isOnline || !user) return;
@@ -107,52 +204,6 @@ export default function NotesScreen({ navigation, route }) {
     [noteId, isOnline, user]
   );
 
-  // 6. Persistence logic (Saves to individual file + Home index)
-  const persistData = async (newTitle, newContent, newColor = noteColor) => {
-    if (!noteId) return;
-
-    const timestamp = new Date().toISOString();
-    
-    try {
-      // Save Full Note File
-      const noteData = {
-        id: noteId,
-        title: newTitle,
-        content: newContent,
-        color: newColor,
-        updated_at: timestamp,
-      };
-      await AsyncStorage.setItem(`${NOTES_CACHE_KEY}${noteId}`, JSON.stringify(noteData));
-
-      // Update Home Screen Index
-      const indexData = await AsyncStorage.getItem("@todo_lists_cache");
-      let itemsIndex = indexData ? JSON.parse(indexData) : [];
-      const existingIndex = itemsIndex.findIndex((item) => item.id === noteId);
-
-      const noteSummary = {
-        id: noteId,
-        title: newTitle || "Untitled Note",
-        color: newColor,
-        updated_at: timestamp,
-        type: "note",
-      };
-
-      if (existingIndex > -1) {
-        itemsIndex[existingIndex] = noteSummary;
-      } else {
-        itemsIndex.unshift(noteSummary);
-      }
-
-      await AsyncStorage.setItem("@todo_lists_cache", JSON.stringify(itemsIndex));
-
-      // Cloud Sync
-      syncToCloud(newTitle, newContent);
-      
-    } catch (e) {
-      console.error("Save Error:", e);
-    }
-  };
-
   const handleColorChange = (selectedColor) => {
     const colorHex = Colors[selectedColor] || selectedColor;
     setNoteColor(colorHex);
@@ -162,11 +213,15 @@ export default function NotesScreen({ navigation, route }) {
 
   if (isLoading) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.background, justifyContent: 'center' }]}>
+      <View style={[styles.container, { backgroundColor: theme.background, justifyContent: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
       </View>
     );
   }
+
+  // --- LINE LOGIC ---
+  // We add 30 extra lines here so there is always "paper" to scroll onto
+  const numberOfLines = Math.ceil(inputHeight / LINE_HEIGHT) + 30;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
@@ -174,21 +229,19 @@ export default function NotesScreen({ navigation, route }) {
 
       {showColorPicker && (
         <View style={{ backgroundColor: theme.surface, paddingBottom: 10, elevation: 5 }}>
-          <ColorSelector
-            selectedColor={noteColor}
-            colorOptions={colorOptions}
-            onSelect={handleColorChange}
-          />
+          <ColorSelector selectedColor={noteColor} colorOptions={colorOptions} onSelect={handleColorChange} />
         </View>
       )}
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        keyboardVerticalOffset={Platform.OS === "ios" ? 100 : 0}
         style={{ flex: 1 }}
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent} 
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
           <TextInput
             style={[styles.titleInput, { color: theme.text }]}
@@ -197,39 +250,40 @@ export default function NotesScreen({ navigation, route }) {
             value={title}
             onChangeText={(v) => {
               setTitle(v);
-              persistData(v, content);
+              latestTitle.current = v;
+              debouncedAutoSave(v, content);
+              addToHistory(v, content);
             }}
             multiline
           />
 
           <View style={styles.inputWrapper}>
-            {/* Background Lines */}
             <View style={styles.linesContainer} pointerEvents="none">
-              {[...Array(50)].map((_, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.line,
-                    { borderBottomColor: isDarkMode ? "#2D3748" : "#F0F0F0" },
-                  ]}
-                />
+              {[...Array(numberOfLines)].map((_, i) => (
+                <View key={i} style={[styles.line, { borderBottomColor: isDarkMode ? "#2D3748" : "#F0F0F0" }]} />
               ))}
             </View>
 
             <TextInput
-              style={[styles.contentInput, { color: theme.text }]}
+              style={[styles.contentInput, { color: theme.text, minHeight: inputHeight }]}
               placeholder="Start writing..."
               placeholderTextColor={theme.textSecondary + "50"}
               value={content}
               onChangeText={(v) => {
                 setContent(v);
-                persistData(title, v);
+                latestContent.current = v;
+                debouncedAutoSave(title, v);
+                addToHistory(title, v);
               }}
+              onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
               multiline
               textAlignVertical="top"
               scrollEnabled={false}
             />
           </View>
+          
+          {/* EXTRA SPACE: This creates the "plenty additional empty lines" feeling */}
+          <View style={{ height: 400 }} /> 
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -238,38 +292,16 @@ export default function NotesScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollContent: {
-    paddingHorizontal: 25,
-    paddingTop: 20,
-    paddingBottom: 100,
-  },
-  titleInput: {
-    fontSize: 32,
-    fontWeight: "800",
-    marginBottom: 30,
-    letterSpacing: -0.5,
-  },
-  inputWrapper: {
-    position: "relative",
-    width: "100%",
-  },
-  linesContainer: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 0,
-  },
-  line: {
-    height: LINE_HEIGHT,
-    borderBottomWidth: 1,
-  },
+  scrollContent: { paddingHorizontal: 25, paddingTop: 20 },
+  titleInput: { fontSize: 32, fontWeight: "800", marginBottom: 30, letterSpacing: -0.5 },
+  inputWrapper: { position: "relative", width: "100%" },
+  linesContainer: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 0 },
+  line: { height: LINE_HEIGHT, borderBottomWidth: 1 },
   contentInput: {
     fontSize: 18,
     lineHeight: LINE_HEIGHT,
-    minHeight: 1500,
     zIndex: 1,
     paddingTop: 0,
+    backgroundColor: "transparent",
   },
 });

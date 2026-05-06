@@ -1,0 +1,10 @@
+node_modules/
+.git/
+.expo/
+web-build/
+build/
+android/
+ios/
+*.zip
+*.apk
+*.tar.gz

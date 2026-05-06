@@ -10,20 +10,26 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#001F3F" 
+      "backgroundColor": "#001F3F"
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.emmanuel.clearday"
     },
     "android": {
+      "package": "com.emmanuel.clearday",
+      "versionCode": 1,
+      "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/splash-icon.png",
         "backgroundColor": "#001F3F"
       },
-      "edgeToEdgeEnabled": true,
-      "package": "com.emmanuel.clearday",
-      "versionCode": 1
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
+        "WAKE_LOCK",
+        "NOTIFICATIONS"
+      ]
     },
     "plugins": [
       [
@@ -51,8 +57,12 @@
     },
     "extra": {
       "eas": {
-        "projectId": "40fd9e72-22d1-44d3-b543-3c81fd85b2df"
+        "projectId": "d4770596-2d1c-449c-9ee2-54663265772f"
       }
-    }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/d4770596-2d1c-449c-9ee2-54663265772f"
+    },
+    "runtimeVersion": "1.0.0"
   }
 }
